@@ -99,6 +99,14 @@ const proxy_mode = uci.get(uciconfig, ucimain, 'proxy_mode') || 'redirect_tproxy
       ipv6_support = uci.get(uciconfig, ucimain, 'ipv6_support') || '0',
       default_interface = uci.get(uciconfig, ucicontrol, 'bind_interface');
 
+const enable_clash_api = uci.get(uciconfig, uciexp, 'enable_clash_api'),
+	  external_ui = uci.get(uciconfig, uciexp, 'external_ui'),
+	  external_ui_download_url = uci.get(uciconfig, uciexp, 'external_ui_download_url'),
+	  external_ui_download_detour = uci.get(uciconfig, uciexp, 'external_ui_download_detour'),
+	  secret = uci.get(uciconfig, uciexp, 'secret'),
+	  default_mode = uci.get(uciconfig, uciexp, 'default_mode'),
+      external_controller = uci.get(uciconfig, uciexp, 'external_controller');
+
 const mixed_port = uci.get(uciconfig, uciinfra, 'mixed_port') || '5330';
 let self_mark, redirect_port, tproxy_port,
     tun_name, tun_addr4, tun_addr6, tun_mtu, tun_gso,
@@ -159,8 +167,8 @@ function generate_outbound(node) {
 
 	const outbound = {
 		type: node.type,
-		tag: 'cfg-' + node['.name'] + '-out',
-		routing_mark: strToInt(self_mark),
+		tag: node.label,
+        routing_mark: (node.type !== 'urltest' && node.type !== 'selector') ? strToInt(self_mark) : null,
 
 		server: node.address,
 		server_port: strToInt(node.port),
@@ -168,6 +176,15 @@ function generate_outbound(node) {
 		username: (node.type !== 'ssh') ? node.username : null,
 		user: (node.type === 'ssh') ? node.username : null,
 		password: node.password,
+
+		/* URLTest */
+        		outbounds: node.outbounds,
+        		url: node.url,
+        		interval: node.interval,
+        		tolerance: strToInt(node.tolerance),
+        		idle_timeout: node.idle_timeout,
+        		default: node.default,
+        		interrupt_exist_connections: (node.interrupt_exist_connections === '1') || null,
 
 		/* Direct */
 		override_address: node.override_address,
@@ -296,19 +313,19 @@ function get_outbound(cfg) {
 
 		let outbounds = [];
 		for (let i in cfg)
-			push(outbounds, get_outbound(i));
+			push(outbounds, i);
 		return outbounds;
 	} else {
 		if (cfg in ['direct-out', 'block-out']) {
 			return cfg;
 		} else {
-			const node = uci.get(uciconfig, cfg, 'node');
+			const node = uci.get(uciconfig, cfg, 'lable');
 			if (isEmpty(node))
 				die(sprintf("%s's node is missing, please check your configuration.", cfg));
 			else if (node === 'urltest')
 				return 'cfg-' + cfg + '-out';
 			else
-				return 'cfg-' + node + '-out';
+				return node;
 		}
 	}
 }
@@ -319,8 +336,6 @@ function get_resolver(cfg) {
 
 	if (cfg in ['default-dns', 'system-dns', 'block-dns'])
 		return cfg;
-	else
-		return 'cfg-' + cfg + '-dns';
 }
 
 function get_ruleset(cfg) {
@@ -329,7 +344,7 @@ function get_ruleset(cfg) {
 
 	let rules = [];
 	for (let i in cfg)
-		push(rules, isEmpty(i) ? null : 'cfg-' + i + '-rule');
+		push(rules, isEmpty(i) ? null : i);
 	return rules;
 }
 /* Config helper end */
@@ -443,13 +458,13 @@ if (!isEmpty(main_node)) {
 			return;
 
 		push(config.dns.servers, {
-			tag: 'cfg-' + cfg['.name'] + '-dns',
+			tag: tag: cfg.label,
 			address: cfg.address,
 			address: cfg.address,
 			address_resolver: get_resolver(cfg.address_resolver),
 			address_strategy: cfg.address_strategy,
 			strategy: cfg.resolve_strategy,
-			detour: get_outbound(cfg.outbound),
+			detour: cfg.outbound,
 			client_subnet: cfg.client_subnet
 		});
 	});
@@ -483,7 +498,8 @@ if (!isEmpty(main_node)) {
 			rule_set: get_ruleset(cfg.rule_set),
 			rule_set_ip_cidr_match_source: (cfg.rule_set_ip_cidr_match_source  === '1') || null,
 			invert: (cfg.invert === '1') || null,
-			outbound: get_outbound(cfg.outbound),
+			clash_mode: cfg.clash_mode,
+            outbound: cfg.outbound,
 			server: get_resolver(cfg.server),
 			disable_cache: (cfg.dns_disable_cache === '1') || null,
 			rewrite_ttl: strToInt(cfg.rewrite_ttl),
@@ -657,7 +673,7 @@ if (!isEmpty(main_node)) {
 			push(config.outbounds, generate_outbound(outbound));
 			config.outbounds[length(config.outbounds)-1].domain_strategy = cfg.domain_strategy;
 			config.outbounds[length(config.outbounds)-1].bind_interface = cfg.bind_interface;
-			config.outbounds[length(config.outbounds)-1].detour = get_outbound(cfg.outbound);
+			config.outbounds[length(config.outbounds)-1].detour = cfg.outbound;
 			push(routing_nodes, cfg.node);
 		}
 	});
@@ -780,7 +796,8 @@ if (!isEmpty(main_node)) {
 			rule_set_ip_cidr_match_source: (cfg.rule_set_ip_cidr_match_source  === '1') || null,
 			rule_set_ip_cidr_accept_empty: (cfg.rule_set_ip_cidr_accept_empty === '1') || null,
 			invert: (cfg.invert === '1') || null,
-			outbound: get_outbound(cfg.outbound)
+			clash_mode: cfg.clash_mode,
+            outbound: cfg.outbound
 		});
 	});
 
@@ -797,7 +814,7 @@ if (!isEmpty(main_node)) {
 			format: cfg.format,
 			path: cfg.path,
 			url: cfg.url,
-			download_detour: get_outbound(cfg.outbound),
+			download_detour: cfg.outbound,
 			update_interval: cfg.update_interval
 		});
 	});
@@ -812,7 +829,14 @@ if (routing_mode in ['bypass_mainland_china', 'custom']) {
 			path: RUN_DIR + '/cache.db',
 			store_rdrc: (cache_file_store_rdrc === '1') || null,
 			rdrc_timeout: cache_file_rdrc_timeout ? (cache_file_rdrc_timeout + 's') : null,
-		}
+		},
+        clash_api: {
+        	external_controller: (enable_clash_api === '1') ? external_controller : null,
+        	external_ui: external_ui,
+        	external_ui_download_url: external_ui_download_url,
+        	external_ui_download_detour: external_ui_download_detour,
+        	secret: secret,
+        	default_mode: default_mode
 	};
 }
 /* Experimental end */

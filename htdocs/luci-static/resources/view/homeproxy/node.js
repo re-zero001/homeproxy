@@ -408,16 +408,18 @@ function renderNodeSettings(section, data, features, main_node, routing_mode) {
 		o.value('wireguard', _('WireGuard'));
 	o.value('vless', _('VLESS'));
 	o.value('vmess', _('VMess'));
+	o.value('selector', _('Selector'));
+	o.value('urltest', _('URLTest'));
 	o.rmempty = false;
 
 	o = s.option(form.Value, 'address', _('Address'));
 	o.datatype = 'host';
-	o.depends({'type': 'direct', '!reverse': true});
+	o.depends({ 'type':  /^(direct|selector|urltest)+$/, '!reverse': true });
 	o.rmempty = false;
 
 	o = s.option(form.Value, 'port', _('Port'));
 	o.datatype = 'port';
-	o.depends({'type': 'direct', '!reverse': true});
+	o.depends({ 'type':  /^(direct|selector|urltest)+$/, '!reverse': true });
 	o.rmempty = false;
 
 	o = s.option(form.Value, 'username', _('Username'));
@@ -456,6 +458,76 @@ function renderNodeSettings(section, data, features, main_node, routing_mode) {
 		return true;
 	}
 	o.modalonly = true;
+
+	/* URLTest and Selector config start */
+	o = s.option(form.MultiValue, 'outbounds', _('Outbounds'),
+				   _('choose outbounds.'));
+	o.load = function (section_id) {
+		delete this.keylist;
+		delete this.vallist;
+		this.value('direct-out', _('Direct'));
+		this.value('block-out', _('Block'));
+		uci.sections(data[0], 'node', (res) => {
+			this.value(res.label, res.label);
+		});
+		return this.super('load', section_id);
+	}
+	o.depends('type', 'urltest');
+	o.depends('type', 'selector');
+	o.modalonly = true;
+	o = s.option(form.Value, 'url', _('Test URL'),
+				   _('https://www.gstatic.com/generate_204 will be used if empty.'));
+	o.depends('type', 'urltest');
+	o.validate = function (section_id, value) {
+		if (section_id && value) {
+			try {
+				var url = new URL(value);
+				if (!url.hostname)
+					return _('Expecting: %s').format(_('valid URL'));
+			}
+			catch (e) {
+				return _('Expecting: %s').format(_('valid URL'));
+			}
+		}
+		return true;
+	}
+	o.modalonly = true;
+	o = s.option(form.Value, 'interval', _('Interval'),
+				   _('The test interval. 3m will be used if empty.'));
+	o.depends('type', 'urltest');
+	o.modalonly = true;
+	o = s.option(form.Value, 'tolerance', _('Tolerance'),
+				   _('The test tolerance in milliseconds. 50 will be used if empty.'));
+	o.datatype = 'uinteger';
+	o.depends('type', 'urltest');
+	o.modalonly = true;
+	o = s.option(form.Value, 'idle_timeout', _('Idle timeout'),
+				   _('The idle timeout. 30m will be used if empty.'));
+	o.depends('type', 'urltest');
+	o.modalonly = true;
+	o = s.option(form.ListValue, 'default', _('Default outbound'),
+				   _('The first outbound will be used if default.'));
+	o.load = function (section_id) {
+		delete this.keylist;
+		delete this.vallist;
+		this.value('', _('Default'));
+		this.value('direct-out', _('Direct'));
+		this.value('block-out', _('Block'));
+		uci.sections(data[0], 'node', (res) => {
+			this.value(res.label, res.label);
+		});
+		return this.super('load', section_id);
+	}
+	o.depends('type', 'selector');
+	o.modalonly = true;
+	o = s.option(form.Flag, 'interrupt_exist_connections', _('Interrupt exist connections'),
+				   _('Interrupt existing connections when the selected outbound has changed.<br/>' +
+				   'Only inbound connections are affected by this setting, internal connections will always be interrupted.'));
+	o.default = o.disabled;
+	o.depends('type', 'urltest');
+	o.depends('type', 'selector');
+	o.modalonly = true;
+	/* URLTest and Selector config end */
 
 	/* Direct config */
 	o = s.option(form.Value, 'override_address', _('Override address'),
